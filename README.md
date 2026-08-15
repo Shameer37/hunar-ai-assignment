@@ -5,8 +5,8 @@ AI Hiring Assistant + People Search & Reachout, built on [Hunar.ai](https://huna
 - **Frontend**: Next.js (App Router) + TypeScript + shadcn/ui
 - **Backend**: FastAPI (Python), deployed as a Vercel Python serverless function under `/api`
 - **Voice AI**: [Hunar Voice Agents API](https://api.voice.hunar.ai/docs/external/)
-- **Deployed solution**: _add link after deploying_
-- **Repo**: _add link after pushing_
+- **Deployed solution**: https://hunar-ai-assignment-flax.vercel.app
+- **Repo**: https://github.com/Shameer37/hunar-ai-assignment
 
 ## What's implemented
 
