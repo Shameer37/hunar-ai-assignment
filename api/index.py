@@ -4,8 +4,9 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import _hunar as hunar
@@ -23,6 +24,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Explicit handlers so every error path returns JSON, regardless of how
+# Vercel's Python runtime wraps this ASGI app -- observed in production
+# that an HTTPException raised deep in a call chain (after a real outbound
+# HTTP request) could otherwise surface as a bare "Internal Server Error"
+# plain-text response instead of Starlette's normal JSON error body.
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An unexpected server error occurred. Please try again."},
+    )
 
 HIRING_AGENT_ID = os.environ.get("HIRING_AGENT_ID", "")
 REACHOUT_AGENT_ID = os.environ.get("REACHOUT_AGENT_ID", "")
