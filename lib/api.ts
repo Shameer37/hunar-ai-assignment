@@ -81,6 +81,7 @@ export function startScreeningCall(body: {
   mobile_number: string;
   job_role: string;
   company: string;
+  consent_confirmed: boolean;
 }) {
   return api<HunarCall>("/api/hiring/screen", {
     method: "POST",

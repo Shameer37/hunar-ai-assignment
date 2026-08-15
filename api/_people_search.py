@@ -15,21 +15,28 @@ from . import _pdl as pdl
 # small set of job_title phrases we match against with an Elasticsearch
 # "should" (OR) query.
 _ROLE_TITLES = {
-    "backend": ["Backend Engineer", "Software Engineer", "Backend Developer"],
-    "frontend": ["Frontend Engineer", "Frontend Developer", "UI Engineer"],
     "full stack": ["Full Stack Engineer", "Full Stack Developer"],
     "ml": ["Machine Learning Engineer", "ML Engineer", "Data Scientist", "AI Engineer"],
     "devops": ["DevOps Engineer", "Site Reliability Engineer", "Infrastructure Engineer"],
     "product": ["Product Manager", "Product Owner"],
+    "backend": ["Backend Engineer", "Software Engineer", "Backend Developer"],
+    "frontend": ["Frontend Engineer", "Frontend Developer", "UI Engineer"],
 }
 
+# Checked in this order (dict order below), NOT alphabetically or by
+# insertion convenience: "full stack" must be checked before "backend" /
+# "frontend" because a full-stack JD almost always also contains the words
+# "backend" and "frontend" (e.g. "comfortable with both backend and
+# frontend"), which would otherwise false-match the more generic bucket
+# first and misclassify the role. General rule: more specific/compound
+# buckets first, generic single-discipline buckets last.
 _ROLE_KEYWORDS = {
-    "backend": ["backend", "server-side", "api developer", "django", "fastapi"],
-    "frontend": ["frontend", "react", "next.js", "ui developer"],
     "full stack": ["full stack", "fullstack", "full-stack"],
     "ml": ["machine learning", "ml engineer", "llm", "ai engineer", "data scientist"],
     "devops": ["devops", "sre", "infrastructure", "kubernetes"],
     "product": ["product manager", "product owner"],
+    "backend": ["backend", "server-side", "api developer", "django", "fastapi"],
+    "frontend": ["frontend", "react", "next.js", "ui developer"],
 }
 
 
@@ -76,6 +83,16 @@ def _location(person: dict) -> str:
     return joined.title() if joined else "Unknown"
 
 
+def _skills(person: dict) -> list[str]:
+    # Like location_*, `skills` can come back as the redaction placeholder
+    # `True` (a bool, not a list) instead of being omitted -- `True or []`
+    # would evaluate to `True`, and iterating a bool raises TypeError.
+    raw = person.get("skills")
+    if not isinstance(raw, list):
+        return []
+    return [s for s in raw if _str(s)][:8]
+
+
 def _linkedin_url(person: dict) -> str | None:
     url = _str(person.get("linkedin_url"))
     if url and not url.startswith("http"):
@@ -93,7 +110,7 @@ def _normalize(person: dict) -> dict:
         "title": (_str(person.get("job_title")) or "Unknown title").title(),
         "company": (_str(person.get("job_company_name")) or "Unknown company").title(),
         "location": _location(person),
-        "skills": [s for s in (person.get("skills") or []) if _str(s)][:8],
+        "skills": _skills(person),
         "linkedin_url": _linkedin_url(person),
         "source": "pdl",
     }
@@ -114,7 +131,12 @@ def search_candidates(job_description: str) -> dict:
                 "should": [{"match": {"job_title": title}} for title in job_titles],
             }
         },
-        "size": 10,
+        # Kept small deliberately: PDL's `search` credit pool is a separate,
+        # much smaller bucket than the enrichment/purchased pool, and a
+        # request for more results than remain in that pool is rejected
+        # outright (0 partial results) rather than truncated -- see the
+        # account-capacity note in README.
+        "size": 5,
     }
     data = pdl.search_people(payload)
     people = data.get("data", [])

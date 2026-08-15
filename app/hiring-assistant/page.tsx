@@ -12,15 +12,19 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { startScreeningCall, isTerminalStatus } from "@/lib/api";
 import { useCallPoll } from "@/lib/use-call-poll";
+
+const PHONE_RE = /^\+[1-9]\d{7,14}$/;
 
 export default function HiringAssistantPage() {
   const [candidateName, setCandidateName] = useState("");
   const [mobileNumber, setMobileNumber] = useState("+91");
   const [jobRole, setJobRole] = useState("");
   const [company, setCompany] = useState("Hunar.ai");
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [callId, setCallId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -29,15 +33,24 @@ export default function HiringAssistantPage() {
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
     setSubmitError(null);
+    if (!PHONE_RE.test(mobileNumber.trim())) {
+      setSubmitError("Enter a valid phone number in E.164 format, e.g. +919876543210.");
+      return;
+    }
+    if (!consentConfirmed) {
+      setSubmitError("You must confirm this candidate has agreed to receive this call.");
+      return;
+    }
+    setSubmitting(true);
     setCallId(null);
     try {
       const res = await startScreeningCall({
         candidate_name: candidateName,
-        mobile_number: mobileNumber,
+        mobile_number: mobileNumber.trim(),
         job_role: jobRole,
         company,
+        consent_confirmed: consentConfirmed,
       });
       setCallId(res.id);
     } catch (e) {
@@ -108,7 +121,17 @@ export default function HiringAssistantPage() {
                   onChange={(e) => setCompany(e.target.value)}
                 />
               </div>
-              <Button type="submit" disabled={submitting}>
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="consent"
+                  checked={consentConfirmed}
+                  onCheckedChange={(checked) => setConsentConfirmed(checked === true)}
+                />
+                <Label htmlFor="consent" className="text-sm font-normal leading-snug text-muted-foreground">
+                  I confirm this candidate has agreed to receive this screening call.
+                </Label>
+              </div>
+              <Button type="submit" disabled={submitting || !consentConfirmed}>
                 {submitting ? "Placing call…" : "Call candidate"}
               </Button>
               {submitError && (

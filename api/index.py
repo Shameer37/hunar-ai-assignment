@@ -18,11 +18,26 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 app = FastAPI(title="Hunar AI Hiring Assignment API")
 
+# Same-origin requests from our own Next.js frontend (both local `vercel dev`
+# and production, via the vercel.json rewrite) are never subject to CORS at
+# all -- browsers only apply it to cross-origin calls. So this list only
+# controls which *other* origins' browser JS may call this API directly; it
+# does not affect our own app. Kept intentionally narrow instead of "*" so a
+# third-party page can't embed a "place a call" button that fires from a
+# visitor's browser against our (metered, real-calling) API.
+_ALLOWED_ORIGINS = ["http://localhost:3000"]
+# Matches the production alias (…-flax.vercel.app) and per-deployment
+# preview URLs (…-<hash>-shameerbunny37-2949s-projects.vercel.app) under
+# this exact Vercel project -- verified against both real observed URL
+# shapes, not just the preview-deployment one.
+_ALLOWED_ORIGIN_REGEX = r"^https://hunar-ai-assignment(-[a-zA-Z0-9]+(-shameerbunny37-2949s-projects)?)?\.vercel\.app$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_origin_regex=_ALLOWED_ORIGIN_REGEX,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 
@@ -55,6 +70,41 @@ _recent_reachouts: dict[str, float] = {}
 _DUPLICATE_WINDOW_SECONDS = 60
 
 
+# ---------------------------------------------------------------------------
+# Best-effort per-IP rate limiting for the three endpoints that either place
+# a real phone call (spends the finite, 3-day Hunar key) or hit a metered
+# third-party API (PDL search). In-memory + per-instance, same honest
+# limitation as the dedupe guard above: on Vercel's Fluid Compute this is
+# real protection against a burst from one warm instance, not a distributed
+# guarantee across every cold instance. That's an acceptable trade-off here
+# -- the goal is to stop casual/scripted abuse of a publicly reachable demo
+# link, not to defend a production system against a determined attacker.
+# ---------------------------------------------------------------------------
+
+_rate_limit_buckets: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_rate_limit(request: Request, scope: str, max_requests: int, window_seconds: int) -> None:
+    key = f"{scope}:{_client_ip(request)}"
+    now = time.time()
+    cutoff = now - window_seconds
+    bucket = [t for t in _rate_limit_buckets.get(key, []) if t > cutoff]
+    if len(bucket) >= max_requests:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests from this client. Please wait a few minutes and try again.",
+        )
+    bucket.append(now)
+    _rate_limit_buckets[key] = bucket
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -70,25 +120,44 @@ def health():
 # Task 1: AI Hiring Assistant (voice screening call)
 # ---------------------------------------------------------------------------
 
+# Shared with Task 2's reachout validation below -- any number this app
+# dials, for either task, goes through the same E.164 format check.
+_PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
+
 
 class ScreeningRequest(BaseModel):
-    candidate_name: str
+    candidate_name: str = Field(..., min_length=1)
     mobile_number: str = Field(..., description="E.164 format, e.g. +919876543210")
-    job_role: str
+    job_role: str = Field(..., min_length=1)
     company: str = "Our Company"
+    consent_confirmed: bool
 
 
 @app.post("/api/hiring/screen")
-def start_screening_call(req: ScreeningRequest):
+def start_screening_call(req: ScreeningRequest, request: Request):
+    _enforce_rate_limit(request, "hiring_screen", max_requests=5, window_seconds=900)
+
     if not HIRING_AGENT_ID:
         raise HTTPException(
             status_code=500,
             detail="HIRING_AGENT_ID not configured. Run scripts/setup_agents.py first.",
         )
+    if not req.consent_confirmed:
+        raise HTTPException(
+            status_code=422,
+            detail="You must confirm this candidate has agreed to receive this call before starting it.",
+        )
+    phone = req.mobile_number.strip()
+    if not _PHONE_RE.match(phone):
+        raise HTTPException(
+            status_code=422,
+            detail="Enter a valid phone number in E.164 format, e.g. +919876543210.",
+        )
+
     payload = {
         "agent_id": HIRING_AGENT_ID,
         "callee_name": req.candidate_name,
-        "mobile_number": req.mobile_number,
+        "mobile_number": phone,
         "custom_data": {
             "job_role": req.job_role,
             "company": req.company,
@@ -117,7 +186,9 @@ class SearchRequest(BaseModel):
 
 
 @app.post("/api/people/search")
-def people_search(req: SearchRequest):
+def people_search(req: SearchRequest, request: Request):
+    _enforce_rate_limit(request, "people_search", max_requests=20, window_seconds=900)
+
     if not req.job_description.strip():
         raise HTTPException(status_code=422, detail="job_description is required")
     return search_candidates(req.job_description)
@@ -129,7 +200,6 @@ def people_search(req: SearchRequest):
 # normalizer in api/_people_search.py never forwards it, even though PDL
 # profiles can include one -- so there is no code path that can end up
 # auto-dialing a number obtained from people-search results.
-_PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
 
 class ReachoutRequest(BaseModel):
@@ -144,7 +214,9 @@ class ReachoutRequest(BaseModel):
 
 
 @app.post("/api/people/reachout")
-def people_reachout(req: ReachoutRequest):
+def people_reachout(req: ReachoutRequest, request: Request):
+    _enforce_rate_limit(request, "people_reachout", max_requests=5, window_seconds=900)
+
     if not REACHOUT_AGENT_ID:
         raise HTTPException(
             status_code=500,

@@ -12,11 +12,14 @@ AI Hiring Assistant + People Search & Reachout, built on [Hunar.ai](https://huna
 
 ### 1. AI Hiring Assistant (`/hiring-assistant`)
 
-Recruiter enters a candidate's name, phone number, and the role. The backend
-places a live outbound call through a Hunar voice agent ("AI Hiring
-Screener") that conducts a short structured phone screen (experience,
-current role, notice period, CTC, availability) and the frontend polls for
-the call's status and structured result in real time.
+Recruiter enters a candidate's name, phone number, and the role, and
+explicitly confirms the candidate has agreed to receive the call (checkbox,
+enforced both client- and server-side — the same phone-format + consent
+pattern Task 2's reachout uses). The backend places a live outbound call
+through a Hunar voice agent ("AI Hiring Screener") that conducts a short
+structured phone screen (experience, current role, notice period, CTC,
+availability) and the frontend polls for the call's status and structured
+result in real time.
 
 ### 2. People Search & Reachout (`/people-search`)
 
@@ -41,6 +44,15 @@ Results (candidate list, and the reachout dashboard with live-polled Hunar
 call status/answers) persist to `localStorage` (`lib/use-persisted-state.ts`)
 so a refresh doesn't lose them — no database was added, per the assignment's
 guidance to prioritize the real integration over persistence infrastructure.
+
+**Known limitation:** PDL's `search` credits are a separate, much smaller
+pool than its enrichment/purchased credits, and the trial key used here has
+very few left. A request for more results than remain in that pool is
+rejected outright (`402`, 0 partial results) rather than truncated, so
+`_people_search.py` deliberately asks for a small page size (`size: 5`) to
+stay within budget. If search returns a clean "PDL API access denied /
+payment required" error, the account's search pool is exhausted — that's a
+real, surfaced error per the no-mock-fallback design, not a bug.
 
 ### 3. Attendance-tracking thought experiment (`/essay`)
 
@@ -71,11 +83,12 @@ reasoning is on the deployed site's `/essay` page.
   use-call-poll.ts           polls a Hunar call until terminal status
   use-persisted-state.ts     localStorage-backed state (Task 2 "dashboard")
 /api                        FastAPI backend (Vercel Python serverless function)
-  index.py                  all routes
+  index.py                  all routes, CORS, per-IP rate limiting, exception handlers
   _hunar.py                 Hunar API client (reads HUNAR_API_KEY from env) -- unchanged, reused by both tasks
   _pdl.py                     real PDL Person Search client (reads PDL_API_KEY from env)
   _people_search.py          JD -> PDL search criteria -> normalized candidates; no mock fallback
 /scripts/setup_agents.py    one-time script: creates the two Hunar agents this app uses
+/tests/test_api.py          FastAPI TestClient smoke tests (mocked Hunar/PDL, no real API calls)
 ```
 
 All `/api/*` requests are rewritten to the single FastAPI function
@@ -101,6 +114,22 @@ npx vercel dev
 
 `vercel dev` runs the Next.js frontend and the Python backend together so
 `/api/*` calls resolve locally exactly as they do in production.
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+11 smoke tests against the FastAPI app (`tests/test_api.py`) using
+`TestClient`, with `api._hunar.create_call` / `api._pdl.search_people`
+mocked — no real calls placed, no real API credits spent. Covers: health
+check, phone-format + consent validation on both call-placing endpoints,
+the reachout dedupe guard, the per-IP rate limiter, and — regression-tested
+directly from a real bug hit during development — that a PDL response
+where redacted fields come back as the literal boolean `true` instead of a
+string doesn't crash the candidate normalizer.
 
 ## Deploying
 
@@ -130,3 +159,20 @@ required keys without values.
 - The Hunar API key provided for this assignment is revoked 3 days after
   issuance, so the deployed demo's live-calling features will stop working
   after that window; the UI and code remain fully reviewable.
+- **CORS** is restricted to `localhost:3000` and this project's own Vercel
+  domains (`api/index.py`) instead of `*`. This only affects *other*
+  websites' browser JS calling the API cross-origin — our own frontend
+  calls it same-origin via the `vercel.json` rewrite either way, so this
+  doesn't change how the app itself behaves.
+- **Per-IP rate limiting** on the three endpoints that either place a real
+  phone call or hit a metered third-party API (`/api/hiring/screen`,
+  `/api/people/reachout`: 5 requests / 15 min; `/api/people/search`: 20
+  requests / 15 min) — so a bot or a curious visitor can't casually drain
+  the finite, 3-day Hunar key or PDL's search credits. Deliberately
+  in-memory and per-serverless-instance, the same honest trade-off as the
+  existing reachout dedupe guard: real protection against a burst, not a
+  distributed guarantee across every cold instance — an acceptable bar for
+  a take-home demo, not a claim of production-grade abuse protection.
+- **Task 1** now requires the same E.164 phone format and explicit consent
+  confirmation as Task 2's reachout, enforced both client-side (the form)
+  and server-side (`ScreeningRequest`) — previously only Task 2 had this.
