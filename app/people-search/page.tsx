@@ -135,9 +135,9 @@ export default function PeopleSearchPage() {
           People Search &amp; Reachout
         </h1>
         <p className="text-muted-foreground">
-          Real candidate search via Apollo.io. Voice reachout through Hunar.ai
-          only ever dials a phone number you explicitly type in and confirm —
-          never a number sourced from search results.
+          Real candidate search via People Data Labs. Voice reachout through
+          Hunar.ai only ever dials a phone number you explicitly type in and
+          confirm — never a number sourced from search results.
         </p>
       </div>
 
@@ -145,8 +145,8 @@ export default function PeopleSearchPage() {
         <CardHeader>
           <CardTitle>1. Search</CardTitle>
           <CardDescription>
-            Candidate data comes from Apollo.io&apos;s People Search API in
-            real time (see <code>api/_apollo.py</code>). No mock or fabricated
+            Candidate data comes from People Data Labs&apos; Person Search API
+            in real time (see <code>api/_pdl.py</code>). No mock or fabricated
             candidates are ever shown.
           </CardDescription>
         </CardHeader>
@@ -183,7 +183,7 @@ export default function PeopleSearchPage() {
               </div>
             </div>
             <Button type="submit" disabled={searching} className="w-fit">
-              {searching ? "Searching Apollo…" : "Search candidates"}
+              {searching ? "Searching PDL…" : "Search candidates"}
             </Button>
             {searchError && (
               <p className="text-sm text-destructive">{searchError}</p>
@@ -244,7 +244,7 @@ export default function PeopleSearchPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">Apollo</Badge>
+                      <Badge variant="outline">PDL</Badge>
                     </TableCell>
                     <TableCell>
                       <Button
@@ -307,7 +307,7 @@ export default function PeopleSearchPage() {
             <DialogDescription>
               {dialogCandidate && (
                 <>
-                  Real Apollo candidate:{" "}
+                  Real PDL candidate:{" "}
                   <span className="font-medium text-foreground">
                     {dialogCandidate.name} — {dialogCandidate.title}
                   </span>

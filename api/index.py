@@ -62,7 +62,7 @@ def health():
         "hunar_key_configured": bool(os.environ.get("HUNAR_API_KEY")),
         "hiring_agent_configured": bool(HIRING_AGENT_ID),
         "reachout_agent_configured": bool(REACHOUT_AGENT_ID),
-        "apollo_key_configured": bool(os.environ.get("APOLLO_API_KEY")),
+        "pdl_key_configured": bool(os.environ.get("PDL_API_KEY")),
     }
 
 
@@ -125,10 +125,10 @@ def people_search(req: SearchRequest):
 
 # Voice reachout is ALWAYS single-candidate and requires an explicit,
 # human-confirmed test/consenting phone number. It deliberately does not
-# accept a candidate's Apollo-sourced phone/contact data at all -- Apollo's
-# search response doesn't even include one (see api/_people_search.py) -- so
-# there is no code path that can end up auto-dialing a number obtained from
-# people-search results.
+# accept a candidate's PDL-sourced phone/contact data at all -- the
+# normalizer in api/_people_search.py never forwards it, even though PDL
+# profiles can include one -- so there is no code path that can end up
+# auto-dialing a number obtained from people-search results.
 _PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
 

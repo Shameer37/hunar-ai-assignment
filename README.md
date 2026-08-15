@@ -21,39 +21,26 @@ the call's status and structured result in real time.
 ### 2. People Search & Reachout (`/people-search`)
 
 Recruiter pastes a job description. The backend extracts search criteria
-(job-title bucket + keywords) and calls **Apollo.io's real People Search
-API** (`POST /api/v1/mixed_people/api_search`, `api/_apollo.py`) — there is
-no mock fallback; if Apollo is unreachable, denies access, or rate-limits,
-the app returns a clean, real error instead of fabricated candidates
-(`api/_people_search.py`).
+(job-title phrases) and calls **People Data Labs' real Person Search API**
+(`POST /v5/person/search`, `api/_pdl.py`) — there is no mock fallback; if PDL
+is unreachable, denies access, or rate-limits, the app returns a clean, real
+error instead of fabricated candidates (`api/_people_search.py`).
 
-Apollo's search response deliberately does not include phone numbers (real
-contact numbers require a separate, credit-consuming enrichment call Apollo
-gates behind a paid plan), so there is no candidate phone data to
-accidentally dial. Voice reachout is a **separate, explicit, single-candidate
-flow**: pick a candidate → a dialog asks for a "Demo / Consenting Phone
-Number" you type in yourself → confirming calls the existing Hunar
-`create_call()` client, unchanged, with that number — never a number sourced
-from search results. This is enforced server-side too:
-`ReachoutRequest` (`api/index.py`) has no field for candidate contact data at
-all, only an explicit `phone_number` + `consent_confirmed`.
+PDL profiles *can* include phone numbers (`mobile_phone` / `phone_numbers`),
+unlike some People Search APIs — so the normalizer in `api/_people_search.py`
+deliberately never reads or forwards those fields to the frontend. Voice
+reachout is a **separate, explicit, single-candidate flow**: pick a candidate
+→ a dialog asks for a "Demo / Consenting Phone Number" you type in yourself →
+confirming calls the existing Hunar `create_call()` client, unchanged, with
+that number — never a number sourced from search results. This is enforced
+server-side too: `ReachoutRequest` (`api/index.py`) has no field for
+candidate contact data at all, only an explicit `phone_number` +
+`consent_confirmed`.
 
 Results (candidate list, and the reachout dashboard with live-polled Hunar
 call status/answers) persist to `localStorage` (`lib/use-persisted-state.ts`)
 so a refresh doesn't lose them — no database was added, per the assignment's
 guidance to prioritize the real integration over persistence infrastructure.
-
-**Known limitation:** the Apollo API key available for this assignment is on
-a Free plan; Apollo's own API explicitly gates `mixed_people/api_search`
-behind a paid plan (`403 API_INACCESSIBLE`, confirmed by directly testing
-the real endpoint during development) and separately, the key's validity
-appears tied to an active Apollo dashboard session (`is_logged_in` flipped
-from `true` to `false` and the same key later returned `401` instead of
-`403` with no code or credential change on our end). The integration is
-real and complete — it makes a genuine HTTPS request to Apollo on every
-search and correctly parses whatever Apollo returns — but a working demo of
-an actual candidate list requires either an Apollo account on a paid plan,
-or a fresh key from an actively logged-in session.
 
 ### 3. Attendance-tracking thought experiment (`/essay`)
 
@@ -86,8 +73,8 @@ reasoning is on the deployed site's `/essay` page.
 /api                        FastAPI backend (Vercel Python serverless function)
   index.py                  all routes
   _hunar.py                 Hunar API client (reads HUNAR_API_KEY from env) -- unchanged, reused by both tasks
-  _apollo.py                 real Apollo People Search client (reads APOLLO_API_KEY from env)
-  _people_search.py          JD -> Apollo search criteria -> normalized candidates; no mock fallback
+  _pdl.py                     real PDL Person Search client (reads PDL_API_KEY from env)
+  _people_search.py          JD -> PDL search criteria -> normalized candidates; no mock fallback
 /scripts/setup_agents.py    one-time script: creates the two Hunar agents this app uses
 ```
 
@@ -104,7 +91,7 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # paste your Hunar API key into .env as HUNAR_API_KEY
-# paste your Apollo API key into .env as APOLLO_API_KEY
+# paste your PDL API key into .env as PDL_API_KEY
 
 python scripts/setup_agents.py
 # copy the two printed agent IDs into .env as HIRING_AGENT_ID / REACHOUT_AGENT_ID
@@ -123,7 +110,7 @@ npx vercel link       # one-time, links this folder to a Vercel project
 npx vercel env add HUNAR_API_KEY production
 npx vercel env add HIRING_AGENT_ID production
 npx vercel env add REACHOUT_AGENT_ID production
-npx vercel env add APOLLO_API_KEY production
+npx vercel env add PDL_API_KEY production
 npx vercel --prod
 ```
 
@@ -133,9 +120,9 @@ required keys without values.
 
 ## Security notes
 
-- `HUNAR_API_KEY` and `APOLLO_API_KEY` are read only from the environment on
-  the backend (`api/_hunar.py`, `api/_apollo.py`); neither is ever sent to or
-  readable from the browser, and no candidate phone/contact data from Apollo
+- `HUNAR_API_KEY` and `PDL_API_KEY` are read only from the environment on
+  the backend (`api/_hunar.py`, `api/_pdl.py`); neither is ever sent to or
+  readable from the browser, and no candidate phone/contact data from PDL
   is ever passed to Hunar automatically (see Task 2 above).
 - `.env`, `.env.local`, and `.vercel` are gitignored.
 - `scripts/setup_agents.py` never prints the API key, only the resulting

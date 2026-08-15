@@ -12,7 +12,7 @@ export type HunarCall = {
 
 export type Candidate = {
   id: string;
-  apollo_id?: string | number;
+  pdl_id?: string | number;
   name: string;
   title: string;
   company: string;
@@ -72,7 +72,7 @@ export function health() {
     hunar_key_configured: boolean;
     hiring_agent_configured: boolean;
     reachout_agent_configured: boolean;
-    apollo_key_configured: boolean;
+    pdl_key_configured: boolean;
   }>("/api/health");
 }
 
@@ -102,7 +102,7 @@ export function searchPeople(job_description: string) {
 /**
  * Always single-candidate, and always requires an explicit, human-typed
  * test/consenting phone number -- never a number sourced from candidate
- * search data (Apollo doesn't return one anyway).
+ * search data -- PDL profiles can include one, but it's never forwarded.
  */
 export function reachOut(body: {
   candidate_id: string;

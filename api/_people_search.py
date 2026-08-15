@@ -1,19 +1,19 @@
-"""Real Apollo.io People Search integration for Task 2.
+"""Real People Data Labs (PDL) Person Search integration for Task 2.
 
-No mock fallback: if Apollo is unreachable, denies access, or rate-limits,
-search_candidates() raises a clean HTTPException (see api/_apollo.py) that
-the frontend displays -- it never silently substitutes fake candidates.
+No mock fallback: if PDL is unreachable, denies access, or rate-limits,
+search_candidates() raises a clean HTTPException (see api/_pdl.py) that the
+frontend displays -- it never silently substitutes fake candidates.
 """
 
 import re
 
 from fastapi import HTTPException
 
-from . import _apollo as apollo
+from . import _pdl as pdl
 
-# Lightweight JD -> Apollo search-criteria mapping. Reused from the original
-# role-bucket heuristic; now feeds Apollo's person_titles/q_keywords instead
-# of just labeling mock data.
+# Lightweight JD -> PDL search-criteria mapping: turns a free-text JD into a
+# small set of job_title phrases we match against with an Elasticsearch
+# "should" (OR) query.
 _ROLE_TITLES = {
     "backend": ["Backend Engineer", "Software Engineer", "Backend Developer"],
     "frontend": ["Frontend Engineer", "Frontend Developer", "UI Engineer"],
@@ -33,42 +33,69 @@ _ROLE_KEYWORDS = {
 }
 
 
-def _extract_search_criteria(job_description: str) -> tuple[str, list[str], str]:
-    """Returns (role_bucket_label, apollo_person_titles, apollo_q_keywords)."""
+def _extract_search_criteria(job_description: str) -> tuple[str, list[str]]:
+    """Returns (role_bucket_label, job_title phrases to search)."""
     text = job_description.lower()
     for role, keywords in _ROLE_KEYWORDS.items():
         if any(k in text for k in keywords):
-            return role, _ROLE_TITLES[role], keywords[0]
+            return role, _ROLE_TITLES[role]
 
     words = re.findall(r"[a-zA-Z]{4,}", text)
     fallback_title = words[0].title() if words else "Engineer"
-    return fallback_title, [fallback_title], fallback_title
+    return fallback_title, [fallback_title]
+
+
+# PDL returns the literal boolean `true` (never a string) for some fields
+# -- notably location_* -- when that field exists but is redacted for the
+# calling account's plan tier. Treat anything that isn't a real, non-empty
+# string as absent rather than crashing or showing "True".
+def _str(value) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _full_name(person: dict) -> str:
-    first = person.get("first_name") or ""
-    last = person.get("last_name") or person.get("last_name_obfuscated") or ""
-    name = f"{first} {last}".strip()
-    return name or "Unnamed candidate"
+    name = _str(person.get("full_name"))
+    if name:
+        return name.title()
+    first = _str(person.get("first_name")) or ""
+    last = _str(person.get("last_name")) or ""
+    combined = f"{first} {last}".strip()
+    return combined.title() if combined else "Unnamed candidate"
 
 
 def _location(person: dict) -> str:
-    parts = [person.get("city"), person.get("state"), person.get("country")]
-    return ", ".join(p for p in parts if p) or "Unknown"
+    name = _str(person.get("location_name"))
+    if name:
+        return name.title()
+    parts = [
+        _str(person.get("location_locality")),
+        _str(person.get("location_region")),
+        _str(person.get("location_country")),
+    ]
+    joined = ", ".join(p for p in parts if p)
+    return joined.title() if joined else "Unknown"
+
+
+def _linkedin_url(person: dict) -> str | None:
+    url = _str(person.get("linkedin_url"))
+    if url and not url.startswith("http"):
+        return f"https://{url}"
+    return url
 
 
 def _normalize(person: dict) -> dict:
-    org = person.get("organization") or {}
+    # Deliberately never reads mobile_phone / phone_numbers / work_email,
+    # even though PDL profiles can include them -- see api/_pdl.py.
     return {
-        "id": f"apollo-{person.get('id')}",
-        "apollo_id": person.get("id"),
+        "id": f"pdl-{person.get('id')}",
+        "pdl_id": person.get("id"),
         "name": _full_name(person),
-        "title": person.get("title") or "Unknown title",
-        "company": org.get("name") or "Unknown company",
+        "title": (_str(person.get("job_title")) or "Unknown title").title(),
+        "company": (_str(person.get("job_company_name")) or "Unknown company").title(),
         "location": _location(person),
-        "skills": person.get("functions") or person.get("departments") or [],
-        "linkedin_url": person.get("linkedin_url"),
-        "source": "apollo",
+        "skills": [s for s in (person.get("skills") or []) if _str(s)][:8],
+        "linkedin_url": _linkedin_url(person),
+        "source": "pdl",
     }
 
 
@@ -79,26 +106,28 @@ def search_candidates(job_description: str) -> dict:
             detail="Please provide a more complete job description (at least a sentence).",
         )
 
-    role_bucket, person_titles, q_keywords = _extract_search_criteria(job_description)
+    role_bucket, job_titles = _extract_search_criteria(job_description)
 
     payload = {
-        "person_titles": person_titles,
-        "q_keywords": q_keywords,
-        "page": 1,
-        "per_page": 10,
+        "query": {
+            "bool": {
+                "should": [{"match": {"job_title": title}} for title in job_titles],
+            }
+        },
+        "size": 10,
     }
-    data = apollo.search_people(payload)
-    people = data.get("people", [])
+    data = pdl.search_people(payload)
+    people = data.get("data", [])
     candidates = [_normalize(p) for p in people]
 
     message = None
     if not candidates:
-        message = "No candidates found on Apollo for this job description. Try different wording."
+        message = "No candidates found on PDL for this job description. Try different wording."
 
     return {
         "query_role": role_bucket,
-        "source": "apollo",
-        "total_entries": data.get("total_entries", len(candidates)),
+        "source": "pdl",
+        "total_entries": data.get("total", len(candidates)),
         "message": message,
         "candidates": candidates,
     }
