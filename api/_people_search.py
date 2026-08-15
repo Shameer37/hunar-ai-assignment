@@ -1,69 +1,27 @@
-"""People-search provider.
+"""Real Apollo.io People Search integration for Task 2.
 
-This currently returns realistic mock candidates so the JD -> candidates ->
-voice-reachout -> dashboard flow can be demoed end to end without a live
-People Data Labs / Apollo.io / Proxycurl / Coresignal key.
-
-To go live: implement `search_candidates(job_description)` to call your
-chosen provider (e.g. PDL's Person Search API) using keywords extracted from
-the JD, and return the same shape this mock returns -- nothing else in the
-app needs to change.
+No mock fallback: if Apollo is unreachable, denies access, or rate-limits,
+search_candidates() raises a clean HTTPException (see api/_apollo.py) that
+the frontend displays -- it never silently substitutes fake candidates.
 """
 
 import re
 
-_MOCK_POOL = [
-    {
-        "id": "cand-1",
-        "name": "Ananya Rao",
-        "title": "Senior Backend Engineer",
-        "company": "Zylker Cloud",
-        "location": "Bengaluru, India",
-        "mobile_number": "+919876500001",
-        "email": "ananya.rao@example.com",
-        "skills": ["Python", "FastAPI", "PostgreSQL", "AWS"],
-    },
-    {
-        "id": "cand-2",
-        "name": "Rohan Mehta",
-        "title": "Full Stack Developer",
-        "company": "Initech Labs",
-        "location": "Pune, India",
-        "mobile_number": "+919876500002",
-        "email": "rohan.mehta@example.com",
-        "skills": ["TypeScript", "React", "Next.js", "Node.js"],
-    },
-    {
-        "id": "cand-3",
-        "name": "Sara Iqbal",
-        "title": "Machine Learning Engineer",
-        "company": "Northwind Analytics",
-        "location": "Hyderabad, India",
-        "mobile_number": "+919876500003",
-        "email": "sara.iqbal@example.com",
-        "skills": ["PyTorch", "LLMs", "MLOps", "Python"],
-    },
-    {
-        "id": "cand-4",
-        "name": "Vikram Singh",
-        "title": "DevOps Engineer",
-        "company": "Globex Systems",
-        "location": "Gurugram, India",
-        "mobile_number": "+919876500004",
-        "email": "vikram.singh@example.com",
-        "skills": ["Kubernetes", "Terraform", "CI/CD", "AWS"],
-    },
-    {
-        "id": "cand-5",
-        "name": "Priya Nair",
-        "title": "Product Manager",
-        "company": "Soylent Corp",
-        "location": "Chennai, India",
-        "mobile_number": "+919876500005",
-        "email": "priya.nair@example.com",
-        "skills": ["Roadmapping", "SQL", "A/B Testing", "Agile"],
-    },
-]
+from fastapi import HTTPException
+
+from . import _apollo as apollo
+
+# Lightweight JD -> Apollo search-criteria mapping. Reused from the original
+# role-bucket heuristic; now feeds Apollo's person_titles/q_keywords instead
+# of just labeling mock data.
+_ROLE_TITLES = {
+    "backend": ["Backend Engineer", "Software Engineer", "Backend Developer"],
+    "frontend": ["Frontend Engineer", "Frontend Developer", "UI Engineer"],
+    "full stack": ["Full Stack Engineer", "Full Stack Developer"],
+    "ml": ["Machine Learning Engineer", "ML Engineer", "Data Scientist", "AI Engineer"],
+    "devops": ["DevOps Engineer", "Site Reliability Engineer", "Infrastructure Engineer"],
+    "product": ["Product Manager", "Product Owner"],
+}
 
 _ROLE_KEYWORDS = {
     "backend": ["backend", "server-side", "api developer", "django", "fastapi"],
@@ -75,24 +33,72 @@ _ROLE_KEYWORDS = {
 }
 
 
-def _guess_role(job_description: str) -> str:
+def _extract_search_criteria(job_description: str) -> tuple[str, list[str], str]:
+    """Returns (role_bucket_label, apollo_person_titles, apollo_q_keywords)."""
     text = job_description.lower()
     for role, keywords in _ROLE_KEYWORDS.items():
         if any(k in text for k in keywords):
-            return role
+            return role, _ROLE_TITLES[role], keywords[0]
+
     words = re.findall(r"[a-zA-Z]{4,}", text)
-    return words[0].title() if words else "General"
+    fallback_title = words[0].title() if words else "Engineer"
+    return fallback_title, [fallback_title], fallback_title
+
+
+def _full_name(person: dict) -> str:
+    first = person.get("first_name") or ""
+    last = person.get("last_name") or person.get("last_name_obfuscated") or ""
+    name = f"{first} {last}".strip()
+    return name or "Unnamed candidate"
+
+
+def _location(person: dict) -> str:
+    parts = [person.get("city"), person.get("state"), person.get("country")]
+    return ", ".join(p for p in parts if p) or "Unknown"
+
+
+def _normalize(person: dict) -> dict:
+    org = person.get("organization") or {}
+    return {
+        "id": f"apollo-{person.get('id')}",
+        "apollo_id": person.get("id"),
+        "name": _full_name(person),
+        "title": person.get("title") or "Unknown title",
+        "company": org.get("name") or "Unknown company",
+        "location": _location(person),
+        "skills": person.get("functions") or person.get("departments") or [],
+        "linkedin_url": person.get("linkedin_url"),
+        "source": "apollo",
+    }
 
 
 def search_candidates(job_description: str) -> dict:
-    role_guess = _guess_role(job_description)
+    if len(job_description.strip()) < 10:
+        raise HTTPException(
+            status_code=422,
+            detail="Please provide a more complete job description (at least a sentence).",
+        )
+
+    role_bucket, person_titles, q_keywords = _extract_search_criteria(job_description)
+
+    payload = {
+        "person_titles": person_titles,
+        "q_keywords": q_keywords,
+        "page": 1,
+        "per_page": 10,
+    }
+    data = apollo.search_people(payload)
+    people = data.get("people", [])
+    candidates = [_normalize(p) for p in people]
+
+    message = None
+    if not candidates:
+        message = "No candidates found on Apollo for this job description. Try different wording."
+
     return {
-        "query_role": role_guess,
-        "source": "mock",
-        "note": (
-            "Demo data. Swap search_candidates() in api/_people_search.py for a "
-            "live PDL / Apollo.io / Proxycurl / Coresignal call to go live -- "
-            "response shape is already compatible."
-        ),
-        "candidates": _MOCK_POOL,
+        "query_role": role_bucket,
+        "source": "apollo",
+        "total_entries": data.get("total_entries", len(candidates)),
+        "message": message,
+        "candidates": candidates,
     }

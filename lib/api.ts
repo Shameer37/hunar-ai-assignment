@@ -12,19 +12,21 @@ export type HunarCall = {
 
 export type Candidate = {
   id: string;
+  apollo_id?: string | number;
   name: string;
   title: string;
   company: string;
   location: string;
-  mobile_number: string;
-  email: string;
   skills: string[];
+  linkedin_url?: string | null;
+  source: string;
 };
 
 export type SearchResponse = {
   query_role: string;
   source: string;
-  note: string;
+  total_entries?: number;
+  message?: string | null;
   candidates: Candidate[];
 };
 
@@ -33,7 +35,6 @@ export type ReachoutResult = {
   candidate_name: string;
   call_id?: string;
   status?: string;
-  error?: string;
 };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -42,8 +43,25 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    // FastAPI error bodies are either {detail: "message"} (our HTTPExceptions)
+    // or {detail: [{msg: "...", ...}, ...]} (pydantic validation errors).
+    // Surface a clean message either way instead of a raw status/stack trace.
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") {
+        message = body.detail;
+      } else if (Array.isArray(body?.detail)) {
+        const joined = body.detail
+          .map((d: { msg?: string }) => d.msg)
+          .filter(Boolean)
+          .join("; ");
+        if (joined) message = joined;
+      }
+    } catch {
+      // response wasn't JSON -- keep the generic message
+    }
+    throw new Error(message);
   }
   return res.json() as Promise<T>;
 }
@@ -54,6 +72,7 @@ export function health() {
     hunar_key_configured: boolean;
     hiring_agent_configured: boolean;
     reachout_agent_configured: boolean;
+    apollo_key_configured: boolean;
   }>("/api/health");
 }
 
@@ -80,13 +99,22 @@ export function searchPeople(job_description: string) {
   });
 }
 
+/**
+ * Always single-candidate, and always requires an explicit, human-typed
+ * test/consenting phone number -- never a number sourced from candidate
+ * search data (Apollo doesn't return one anyway).
+ */
 export function reachOut(body: {
+  candidate_id: string;
+  candidate_name: string;
+  candidate_title?: string;
   job_description: string;
   job_title: string;
   company: string;
-  candidates: { id: string; name: string; mobile_number: string; title: string }[];
+  phone_number: string;
+  consent_confirmed: boolean;
 }) {
-  return api<{ results: ReachoutResult[] }>("/api/people/reachout", {
+  return api<ReachoutResult>("/api/people/reachout", {
     method: "POST",
     body: JSON.stringify(body),
   });
